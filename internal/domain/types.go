@@ -95,14 +95,25 @@ type NodeLease struct {
 	ProbeID      string     `json:"probe_id,omitempty"`
 }
 
+// LeaseGrant is the frozen per-lease summary captured when an allocation
+// group is created. Later node and lease lifecycle changes never rewrite it.
+type LeaseGrant struct {
+	LeaseID   string     `json:"lease_id"`
+	NodeID    string     `json:"node_id"`
+	State     LeaseState `json:"state"`
+	ExpiresAt time.Time  `json:"expires_at"`
+}
+
 type LeaseGroup struct {
-	ID                 string    `json:"id"`
-	PlanID             string    `json:"plan_id"`
-	RequestKey         string    `json:"request_key"`
-	RequestFingerprint string    `json:"request_fingerprint"`
-	Region             string    `json:"region,omitempty"`
-	LeaseIDs           []string  `json:"lease_ids"`
-	CreatedAt          time.Time `json:"created_at"`
+	ID                 string   `json:"id"`
+	PlanID             string   `json:"plan_id"`
+	RequestKey         string   `json:"request_key"`
+	RequestFingerprint string   `json:"request_fingerprint"`
+	Region             string   `json:"region,omitempty"`
+	LeaseIDs           []string `json:"lease_ids"`
+	// LeaseGrants is the frozen allocation result, stably sorted by lease id.
+	LeaseGrants []LeaseGrant `json:"lease_grants,omitempty"`
+	CreatedAt   time.Time    `json:"created_at"`
 }
 
 type Probe struct {

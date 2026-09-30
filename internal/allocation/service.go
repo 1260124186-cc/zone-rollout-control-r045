@@ -58,6 +58,22 @@ func (s *Service) Allocate(
 					"request_key": input.RequestKey,
 				})
 			}
+			// Groups created before summaries were persisted are explained
+			// once from provable lease facts, then frozen in the same
+			// transaction. The frozen content is never recomputed or rewritten
+			// afterwards.
+			if len(existing.LeaseGrants) == 0 {
+				grants, err := domain.ExplainLeaseGrants(existing.ID, existing.LeaseIDs, state.Leases)
+				if err != nil {
+					return err
+				}
+				existing.LeaseGrants = grants
+				state.LeaseGroups[existing.ID] = existing
+				store.AddAudit(state, s.ids, "lease_group", existing.ID, "grants_explained", now, map[string]any{
+					"plan_id":     existing.PlanID,
+					"lease_count": len(grants),
+				})
+			}
 			group = existing
 			return nil
 		}
@@ -91,6 +107,7 @@ func (s *Service) Allocate(
 
 		groupID := s.ids.New("grp")
 		leaseIDs := make([]string, 0, len(candidates))
+		createdLeases := make([]domain.NodeLease, 0, len(candidates))
 		expiresAt := now.Add(time.Duration(input.LeaseSeconds) * time.Second)
 		for _, candidate := range candidates {
 			leaseID := s.ids.New("lse")
@@ -98,7 +115,7 @@ func (s *Service) Allocate(
 			candidate.Version++
 			candidate.UpdatedAt = now
 			state.Nodes[candidate.ID] = candidate
-			state.Leases[leaseID] = domain.NodeLease{
+			lease := domain.NodeLease{
 				ID:           leaseID,
 				PlanID:       planID,
 				NodeID:       candidate.ID,
@@ -107,7 +124,9 @@ func (s *Service) Allocate(
 				ClaimedAt:    now,
 				ExpiresAt:    expiresAt,
 			}
+			state.Leases[leaseID] = lease
 			leaseIDs = append(leaseIDs, leaseID)
+			createdLeases = append(createdLeases, lease)
 		}
 		group = domain.LeaseGroup{
 			ID:                 groupID,
@@ -116,6 +135,7 @@ func (s *Service) Allocate(
 			RequestFingerprint: fingerprint,
 			Region:             input.Region,
 			LeaseIDs:           leaseIDs,
+			LeaseGrants:        domain.FreezeLeaseGrants(createdLeases),
 			CreatedAt:          now,
 		}
 		state.LeaseGroups[group.ID] = group

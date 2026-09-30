@@ -29,6 +29,7 @@ type harness struct {
 	server   *http.Server
 	listener net.Listener
 	tempDir  string
+	keepDir  bool
 }
 
 func newHarness() (*harness, error) {
@@ -36,9 +37,12 @@ func newHarness() (*harness, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create temporary directory: %w", err)
 	}
+	return newHarnessAt(tempDir, true)
+}
+
+func newHarnessAt(tempDir string, ownTempDir bool) (*harness, error) {
 	stateStore, err := store.Open(tempDir + "/state.json")
 	if err != nil {
-		_ = os.RemoveAll(tempDir)
 		return nil, fmt.Errorf("open temporary store: %w", err)
 	}
 	clock := platform.NewManualClock(time.Date(2026, time.September, 25, 12, 0, 0, 0, time.UTC))
@@ -53,7 +57,6 @@ func newHarness() (*harness, error) {
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		_ = os.RemoveAll(tempDir)
 		return nil, fmt.Errorf("listen: %w", err)
 	}
 	server := &http.Server{Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second}
@@ -67,15 +70,47 @@ func newHarness() (*harness, error) {
 		server:   server,
 		listener: listener,
 		tempDir:  tempDir,
+		keepDir:  !ownTempDir,
 	}, nil
 }
 
-func (h *harness) close() {
+func (h *harness) snapshotPath() string {
+	return h.tempDir + "/state.json"
+}
+
+// shutdown stops the server without removing the snapshot directory, so the
+// state can be reopened by another process instance.
+func (h *harness) shutdown() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_ = h.server.Shutdown(ctx)
+	if err := h.server.Shutdown(ctx); err != nil {
+		return err
+	}
+	// Shutdown already closed the listener; ignore the redundant close error.
 	_ = h.listener.Close()
-	_ = os.RemoveAll(h.tempDir)
+	return nil
+}
+
+func (h *harness) restart() error {
+	if err := h.shutdown(); err != nil {
+		return err
+	}
+	next, err := newHarnessAt(h.tempDir, false)
+	if err != nil {
+		return err
+	}
+	h.baseURL = next.baseURL
+	h.clock = next.clock
+	h.server = next.server
+	h.listener = next.listener
+	return nil
+}
+
+func (h *harness) close() {
+	_ = h.shutdown()
+	if !h.keepDir {
+		_ = os.RemoveAll(h.tempDir)
+	}
 }
 
 func (h *harness) call(method string, path string, requestBody any, target any) error {

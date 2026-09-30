@@ -113,6 +113,8 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/leases \
   }'
 ```
 
+响应的 `data.lease_grants` 是创建时冻结的分配摘要，按 `lease_id` 稳定排序，直接给出每条租约对应的 `node_id`、初始 `state`（始终为 `claimed`）和 `expires_at`，无需逐个查询租约。后续释放或过期不会改写该摘要；同键重放和服务重启后读取都返回同一份冻结内容。`data.lease_ids` 保持不变，旧调用方兼容。
+
 提交探针：
 
 ```bash

@@ -95,14 +95,43 @@ type NodeLease struct {
 	ProbeID      string     `json:"probe_id,omitempty"`
 }
 
+type LeaseSummarySource string
+
+const (
+	// LeaseSummaryCreated marks a summary frozen inside the allocation
+	// transaction, with every lease still in its initial claimed state.
+	LeaseSummaryCreated LeaseSummarySource = "created"
+	// LeaseSummaryDerived marks a summary reconstructed for an allocation group
+	// created before summaries were stored. The provable lease facts at the
+	// moment of reconstruction are frozen as-is.
+	LeaseSummaryDerived LeaseSummarySource = "derived"
+)
+
+type LeaseSummaryItem struct {
+	LeaseID   string     `json:"lease_id"`
+	NodeID    string     `json:"node_id"`
+	State     LeaseState `json:"state"`
+	ExpiresAt time.Time  `json:"expires_at"`
+}
+
+type LeaseSummary struct {
+	Source LeaseSummarySource `json:"source"`
+	Items  []LeaseSummaryItem `json:"items"`
+}
+
 type LeaseGroup struct {
-	ID                 string    `json:"id"`
-	PlanID             string    `json:"plan_id"`
-	RequestKey         string    `json:"request_key"`
-	RequestFingerprint string    `json:"request_fingerprint"`
-	Region             string    `json:"region,omitempty"`
-	LeaseIDs           []string  `json:"lease_ids"`
-	CreatedAt          time.Time `json:"created_at"`
+	ID                 string   `json:"id"`
+	PlanID             string   `json:"plan_id"`
+	RequestKey         string   `json:"request_key"`
+	RequestFingerprint string   `json:"request_fingerprint"`
+	Region             string   `json:"region,omitempty"`
+	LeaseIDs           []string `json:"lease_ids"`
+	// Summary is the frozen allocation outcome. It is written once and never
+	// rewritten when leases or nodes change afterwards. Nil only for groups
+	// loaded from snapshots produced before summaries existed; such groups are
+	// deterministically derived on their first idempotent replay.
+	Summary   *LeaseSummary `json:"summary,omitempty"`
+	CreatedAt time.Time     `json:"created_at"`
 }
 
 type Probe struct {

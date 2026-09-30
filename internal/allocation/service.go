@@ -58,6 +58,14 @@ func (s *Service) Allocate(
 					"request_key": input.RequestKey,
 				})
 			}
+			if existing.Summary == nil {
+				summary, err := deriveLeaseSummary(existing, state)
+				if err != nil {
+					return err
+				}
+				existing.Summary = summary
+				state.LeaseGroups[existingID] = existing
+			}
 			group = existing
 			return nil
 		}
@@ -109,6 +117,13 @@ func (s *Service) Allocate(
 			}
 			leaseIDs = append(leaseIDs, leaseID)
 		}
+		// Freeze the outcome inside the same transaction, from the lease facts
+		// that were just written. Later releases, expirations, reports, or node
+		// state changes never touch it.
+		summary, err := buildLeaseSummary(domain.LeaseSummaryCreated, groupID, leaseIDs, state)
+		if err != nil {
+			return err
+		}
 		group = domain.LeaseGroup{
 			ID:                 groupID,
 			PlanID:             planID,
@@ -116,6 +131,7 @@ func (s *Service) Allocate(
 			RequestFingerprint: fingerprint,
 			Region:             input.Region,
 			LeaseIDs:           leaseIDs,
+			Summary:            summary,
 			CreatedAt:          now,
 		}
 		state.LeaseGroups[group.ID] = group
@@ -199,4 +215,51 @@ func expireLeases(state *domain.State, now time.Time) int {
 		count++
 	}
 	return count
+}
+
+// deriveLeaseSummary reconstructs the frozen outcome for an allocation group
+// persisted before summaries existed. It relies solely on the durable lease
+// facts, so the same snapshot always yields the same summary regardless of
+// when the reconstruction happens. The resulting summary is then frozen on the
+// group and never recomputed.
+func deriveLeaseSummary(group domain.LeaseGroup, state *domain.State) (*domain.LeaseSummary, error) {
+	return buildLeaseSummary(domain.LeaseSummaryDerived, group.ID, group.LeaseIDs, state)
+}
+
+// buildLeaseSummary produces a summary from the lease records that provably
+// belong to a group. Items are ordered by lease identifier, independently of
+// the group's lease_ids order, so every caller and every restart observes the
+// same stable sequence.
+func buildLeaseSummary(
+	source domain.LeaseSummarySource,
+	groupID string,
+	leaseIDs []string,
+	state *domain.State,
+) (*domain.LeaseSummary, error) {
+	ordered := append([]string(nil), leaseIDs...)
+	sort.Strings(ordered)
+	items := make([]domain.LeaseSummaryItem, 0, len(ordered))
+	for _, leaseID := range ordered {
+		lease, ok := state.Leases[leaseID]
+		if !ok {
+			return nil, domain.NewError(domain.CodeStorageFailure, "lease group references a missing lease", map[string]any{
+				"lease_group_id": groupID,
+				"lease_id":       leaseID,
+			})
+		}
+		if lease.AllocationID != groupID {
+			return nil, domain.NewError(domain.CodeStorageFailure, "lease is attached to another allocation group", map[string]any{
+				"lease_group_id": groupID,
+				"lease_id":       leaseID,
+				"allocation_id":  lease.AllocationID,
+			})
+		}
+		items = append(items, domain.LeaseSummaryItem{
+			LeaseID:   lease.ID,
+			NodeID:    lease.NodeID,
+			State:     lease.State,
+			ExpiresAt: lease.ExpiresAt.UTC(),
+		})
+	}
+	return &domain.LeaseSummary{Source: source, Items: items}, nil
 }
